@@ -1,0 +1,628 @@
+---
+title: "Homework 6 - Regression"
+author: "Solutions"
+date: "Spring 2022"
+output:
+  html_document:
+    df_print: paged
+  word_document: null
+---
+
+## Set up
+
+```{r setup, message=FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+pacman::p_load(GGally, tidyverse, broom, rpart, rpart.plot, FNN, caTools)
+
+# Changing the default GGplot theme
+theme_set(theme_bw())
+
+# Read in the data as countries
+countries <- read.csv("Happiness19.csv")
+
+# Changing the Country from a column to the row names:
+countries <- countries %>% 
+  column_to_rownames(var = "Country")
+
+
+skimr::skim(countries)
+```
+
+
+## Create the correlation plot and scatterplot matrix
+
+```{r corr_scatter_plots, message=F, warning=F}
+# Correlation plot:
+ggcorr(data = countries, 
+       low = "red", 
+       high = "blue", 
+       mid = "grey90",
+       label = TRUE,
+       label_round = 2)
+
+# Scatterplot matrix:
+ggpairs(data = countries)
+
+# Not required: Scatterplot of Score (Outcome) vs the other 6 predictors
+countries %>% 
+  pivot_longer(cols = -Score,
+               names_to = "features",
+               values_to = "values") %>% 
+  ggplot(mapping = aes(x = values, 
+                       y = Score)) + 
+  geom_point() + 
+  geom_smooth(method = "loess", 
+              se = F, 
+              color = "blue") +
+  facet_wrap(facets = ~ features, 
+             ncol = 3, 
+             scales = "free") + 
+  labs(x = NULL, 
+       y = "Happiness Score")
+
+
+```
+
+## Question 1:  Multiple Regression of Happiness data -- Description
+
+### 1a) Description
+
+We are trying to predict the happiness score of many countries, based on 
+six predictive features:  GDP, Support, Life Expectancy, Freedom, Generosity, and Corruption.  We'll use the multiple regression, which creates a linear model predicting happiness Score as a linear function of the prediction variables.
+
+
+### 1b) First Model
+
+GDP, Support, Life Expectancy, and Freedom are all positive predictors of Score. The R-squared is 77.9%, indicating that the predictions are fairly reliable
+
+```{r 1b_reg1}
+#  Create a linear model to predict Score, using all of the other variables, and summarize the model.
+happy_lm <- lm(formula = Score ~ ., 
+               data = countries)
+
+# Showing the model terms
+tidy(happy_lm)
+
+# Displaying the fit statistics
+glance(happy_lm)
+
+```
+
+### 1c)
+
+```{r 1c_multicollinearity}
+# Finding the variance inflation factor for the predictor features
+regclass::VIF(happy_lm) %>% round(digits = 2)
+
+
+```
+
+Using the correlation plot from the initial set up, no pair of predictor features have an extremely high correlation, with the highest belonging to GPD and LifeExp at 0.84.
+
+Calculating the variance inflation factor for both, none of the predictors have a VIF over 5. GDP has the highest at 4.12, but that isn't large enough to be concerned about multicollinearity.
+
+
+
+### 1d) Second Model
+
+GDP, Support, Life Expectancy, and Freedom are still all positive predictors of Score. 
+
+The R squared is 79.92%, which is only 0.01% higher than the model without corruption^2 and the sigma is essentially the same. Including the squared term doesn't increase the predictive power by a significant margin.
+
+```{r 1d_reg2}
+# Creating a squared term for Corrupt
+countries <- countries %>% 
+  mutate(Corrupt_sq = Corrupt^2)
+
+# Fitting model 2 with corrupt^2
+happy2_lm <- lm(Score ~ ., data = countries)
+
+# Summary of the model
+tidy(happy2_lm)
+
+# Comparing the fit statistics fo the 2 models
+bind_rows(glance(happy_lm),
+          glance(happy2_lm))
+
+
+```
+
+### 1e) Third Model
+
+GDP, Support, Life Expectancy, and Freedom are still all positive predictors of Score, and also Corruptbin. The fit statistics are a little higher for this model than the first model we fit.
+
+```{r 1e_reg3}
+#  Create a dummy variable, called Corruptbin, that is 1 if Corrupt is > .2 and 0 otherwise.
+countries <- 
+  countries %>% 
+  mutate(Corruptbin = if_else(Corrupt > 0.2, 1, 0))
+
+# Fitting the third model, replacing corruption with corruptbin
+happy3_lm <- lm(Score ~ GDP + Support + LifeExp + Freedom + Generosity + Corruptbin, 
+                data = countries)
+
+# Checking the summary and fit stats
+tidy(happy3_lm)
+
+# Fit statistics of the 3 models
+bind_rows(glance(happy_lm),
+          glance(happy2_lm),
+          glance(happy3_lm))
+
+```
+
+
+### 1f) Model Selection
+The fit of all 3 models appears to be about equal. If the models predict the outcome variable about equally well, then we choose the simplest one. Usually that is the one with the fewest predictors, but we have 2 models with 6 predictors: Model 1 and Model 3. 
+
+Model 3 fits better (and is a little simpler to use since we just need to know if corruption is greater than 0.2 rather than the actual value), so we should pick model 3!
+
+
+
+### 1g) Residual Plot Assess Model Fit
+
+```{r 1g_regmodelfit}
+# Predicting happiness score, adding it to the original data set, then finding the residuals
+countries2 <- 
+  data.frame(countries, 
+             pred_score = predict(happy3_lm)) %>% 
+  mutate(score_res = Score - pred_score)
+
+# Calculating the correlation between y and y_hat
+cor_multireg <- cor(countries2$pred_score, 
+                    countries2$Score)
+cor_multireg
+
+# Creating the residual plot: residuals vs predicted outcome values
+# But first, we need to calculate the residuals: Actual - predicted
+
+countries2 %>% 
+  ggplot(mapping = aes(x = pred_score, 
+                       y = score_res)) + 
+  geom_point() +
+  geom_smooth(method = "lm", 
+              se = F, 
+              color = "red") + 
+  labs(x = "Predicted Happiness Score",
+       y = "Residuals") + 
+  theme_test()
+```
+In the best model, the predictions have a correlation of `r cor_multireg` with the actual happiness scores, which indicates the regression model predict happiness scores accurately. 
+
+The residual plot looks appropriate, with no curving patterns or increasing/decreasing spread. There are a couple of larger residuals where the predictions are off by 1 or more. Could be worth checking which countries they are!
+
+
+
+
+### 1h) Assessing Model Fit
+
+
+```{r 1h_regmodelfit}
+# Function for MAE
+MAE <- function(actual, predicted) {
+  mean(abs(actual - predicted))  
+}
+
+# the mean of scores that we'll use for the MAE
+mean(countries$Score)
+
+# Model MAE
+MAE_mlr <- MAE(actual = countries2$Score, 
+                predicted = countries2$pred_score)
+
+# MAE using the average happiness score
+MAE_avg <- MAE(actual = countries2$Score, 
+                  predicted = mean(countries2$Score))
+
+# Calculating the improvement using the MLR model compared to just predicting the mean happiness score
+MAE_mlr_improve <- MAE_avg - MAE_mlr
+
+c(multireg = MAE_mlr, 
+  average = MAE_avg, 
+  improvement = MAE_mlr_improve,
+  improve_prop = MAE_mlr_improve/MAE_avg) %>% 
+  
+  round(digits = 3)
+
+```
+
+
+Predictions are off by, on average, 0.400 points (the MAE). For comparison, they would be off by 0.917 if we just used the mean happiness score to predict for all countries, so we have improved MAE by 0.516, an average error reduction of about 56%!
+
+
+
+
+
+## Question 2:  Regression Tree 
+
+```{r Q2_reread_data}
+countries <- 
+  read.csv("Happiness19.csv") %>% 
+  column_to_rownames(var = "Country")
+```
+
+
+### Part 2a) Description
+
+Using Regression Tree analysis, we will create a decision tree that will predict the happiness score, based on splits of various predictive features. The prediction is the mean of cases at each final node.
+
+
+###  Part 2b) Divide into Training and Test sets
+
+```{r  2b_dividedata, warning = FALSE}
+# Keep this at the top of the code chunk
+RNGversion('4.0.0')
+set.seed(187)
+
+# Form the split vector below:
+
+country_split <- sample.split(Y = countries$Score,
+                              SplitRatio = 100)
+
+# Printing the first 5 rows of the training data
+country_train <- countries[country_split, ]
+
+head(country_train, 5)
+
+# Printing the first 5 rows of the testing data
+country_test <- countries[!country_split, ]
+
+head(country_test, 5)
+
+```
+
+### Part 2c) Create the Regression Tree for the Training set
+
+**Use the code chunk below to fully form the tree and find where to prune the tree**
+
+```{r 2c_fullTree}
+# Keep this at the top of the code chunk
+RNGversion("4.0.0")
+set.seed(12345)
+
+# Fully growing the tree:
+country_full_tree <- rpart(Score ~ ., 
+                           data = country_train,
+                           method = "anova",
+                           minbucket = 1,
+                           minsplit = 2, 
+                           cp = -1)
+
+## Finding where to split the tree
+# First find min(xerror) + xstd
+prune_point <- 
+  country_full_tree$cptable %>% 
+  data.frame() %>% 
+  filter(xerror == min(xerror)) %>% 
+  mutate(prune_xerror = xerror + xstd) 
+
+prune_point
+
+
+# Now find the cp value used to prune the tree
+country_full_tree$cptable %>% 
+  data.frame() %>% 
+  filter(xerror <= prune_point$prune_xerror)
+
+# Find the rows 2 & 3 to find the cp value to prune the tree
+country_full_tree$cptable %>% 
+  data.frame() %>% 
+  slice(2:3)
+
+
+```
+
+Should use cp = 0.05 (or any choice between 0.0409 to 0.15)
+
+
+```{r 2c_pruneTree}
+# Prune the tree below
+country_regtree <- prune(tree = country_full_tree,
+                         cp = 0.05)
+```
+
+
+
+### Part 2d) Create Visual of Regression Tree
+
+
+```{r 2d_treeplot}
+rpart.plot(country_regtree, 
+           digits = 4,
+           type = 5, 
+           extra = 101,
+           box.palette = 'BlGnYl',
+           shadow.col = 'gray')
+```
+
+
+We can see that Support is an important predictor: Countries with higher support have substantially higher happiness score predictions. 
+
+GDP also makes a big difference: higher GPD predicts higher score.  
+
+
+###  2e) Generate predictions and correlations
+
+#### i) Scatterplot
+
+```{r 2e_regtreepred}
+pred_country_regtree <- predict(country_regtree, 
+                                newdata = country_test)
+
+# Creating the scatterplot:
+data.frame(Actual = country_test$Score, 
+           pred_country_regtree) %>% 
+  
+  ggplot(mapping = aes(x = pred_country_regtree, 
+                       y = Actual, 
+                       color = factor(pred_country_regtree))) + 
+  geom_jitter(show.legend = F,
+              width = 0.25,
+              height = 0) + 
+  
+  labs(x = "Predicted Happiness", 
+       y = "Actual Happiness",
+       title = "Predicted Happiness Using Regression Tree") + 
+  
+  theme_bw()
+```
+
+Since the pruned tree only has 3 leaf nodes, the tree will only make 3 predictions, around 4.5, 5.5, and 6.75.
+
+
+
+#### ii) Summary Stats
+
+```{r 2eii}
+# Adding the predictions for knn with k = 27 in the same data set as the Actual Score
+data.frame(country_test,
+           tree_pred = pred_country_regtree) %>% 
+  
+  # Calculating the 5 number summary for both variables using quantile
+  summarize(Actual = quantile(Score, probs = 0:4/4),
+            Predicted = quantile(tree_pred, probs = 0:4/4)) %>%
+  
+  mutate(Actual = round(Actual, digits = 2),
+         Predicted = round(Predicted, digits = 2)) %>% 
+  
+  # Adding a column to indicate what the summary is
+  add_column(Summary = c("Min", "Q1", "Median", "Q3", "Max"),
+             .before = "Actual") # Moving the Summary column before the Actual Column
+```
+
+Because there are only 3 leaf nodes, the 5 number summary won't make much sense because there are only 3 predicted values!
+
+#### iii) Correlation
+
+```{r 2eiii}
+
+# Correlation between y and y_hat
+cor_regtree <- cor(pred_country_regtree, 
+                   country_test$Score)
+cor_regtree
+```
+
+The correlation of predictions with actual scores is `r round(cor_regtree, 3)`, which is much higher than would be expected for only having 3 different predicted values!
+
+
+
+
+### Part 2f) Calculate the Mean Absolute Error
+
+
+```{r 2f_MAEregtree}
+# Finding the Mean Average Error for y_hat and y_bar
+MAE_regtree <- MAE(country_test$Score, 
+                   pred_country_regtree)
+
+MAE_ybar <- MAE(country_test$Score, 
+                mean(country_test$Score))
+
+# Checking the improvement in MAE for the regression tree
+MAE_regtree_improve <- MAE_ybar - MAE_regtree
+
+c(RegTree = MAE_regtree, 
+  average = MAE_ybar, 
+  improvement = MAE_regtree_improve,
+  improve_prop = MAE_regtree_improve/MAE_ybar) %>% 
+  round(3)
+```
+
+Happiness Score predictions using the Regression Tree are off by about `r round(MAE_regtree, 3)` points, on average.  This doesn't seem unreasonable.  If we used the overall average of the scores as a prediction, we'd be off by `r MAE_ybar`, on average, so the model improves MAE by `r MAE_regtree_improve`, an improvement of `r round(MAE_regtree_improve/MAE_ybar *100, 1)` percent.  
+
+
+
+
+## Question 3:  KNN Regression
+### Part 3a) Description
+
+Using k-Nearest-Neighbors Regression, we will predict the happiness score for countries using the average happiness score of the k closest countries. 
+
+Which countries are considered the closest is based on distance using rescaled predictive features. 
+
+
+### Part 3b) Training and Testing Data for KNN Regression
+
+```{r 3b_stanSplit}
+# Standardizing the data:
+countries_stan <- 
+  countries %>% 
+  mutate(across(.cols = -Score,
+                .fns = ~ (. - mean(.)) / sd(.)))
+
+## Use the same split vector from question 2 to form the training and testing data
+
+# Training:
+country_train3 <- countries_stan[country_split, ]
+head(country_train3)
+
+
+# Training:
+country_test3 <- countries_stan[!country_split, ]
+head(country_test3)
+
+```
+
+### Part 3c) Find the best choice of k by using R-Squared
+
+
+```{r 3c_findK}
+# Use the choices of k below:
+k_choice <- 5:30
+
+# Create a vector to store the R-squared results
+R2_k <- NULL
+
+
+# Looping through the choices:
+for (i in k_choice) {
+  knn_temp <- knn.reg(train = country_train3 %>% dplyr::select(-Score),
+                      test = country_test3 %>% dplyr::select(-Score),
+                      y = country_train3$Score,
+                      k = i)
+  
+  R2_k <- c(R2_k, cor(knn_temp$pred, country_test3$Score)^2)
+}
+
+# Create the line graph
+data.frame(k = k_choice,
+           R2 = R2_k) %>% 
+  
+  ggplot(mapping = aes(x = k,
+                       y = R2)) +
+  geom_point() + 
+  geom_line() +
+  
+  labs(x = "Choice of k",
+       y = "R-Squared") + 
+  
+  scale_x_continuous(breaks = k_choice,
+                     minor_breaks = NULL) + 
+  scale_y_continuous(minor_breaks = NULL)
+```
+
+
+### Part 3d) KNN: Predicted vs Actual
+
+```{r 3d}
+# correlation between the predicted and true values
+knn27_pred <- knn.reg(train = country_train3 %>% dplyr::select(-Score),
+                      test = country_test3 %>% dplyr::select(-Score),
+                      y = country_train3$Score,
+                      k = 22)$pred
+```
+
+
+#### Part 3d i) Scatterplot Actual vs Predict
+
+```{r 3di}
+data.frame(country_test,
+           knn_pred = knn27_pred) %>% 
+  
+  ggplot(mapping = aes(x = knn_pred,
+                       y = Score)) +
+  geom_point() + 
+  
+  labs(y = "Happiness Score",
+       x = "Predicted Happiness",
+       title = "Actual vs Predicted Happiness with KNN")
+
+
+```
+
+The scatterplot shows the predicted happiness scores are fairly close to the actual happiness scores of the 56 test countries, but might be able to be improved!
+
+
+#### Part 3d ii) Calculate the summary statistics for actual and predicted
+
+```{r 3dii}
+# Adding the predictions for knn with k = 27 in the same data set as the Actual Score
+data.frame(country_test,
+           knn_pred = knn27_pred) %>% 
+  
+  # Calculating the 5 number summary for both variables using quantile
+  summarize(Actual = quantile(Score, probs = 0:4/4),
+            Predicted = quantile(knn_pred, probs = 0:4/4)) %>%
+  
+  mutate(Actual = round(Actual, digits = 2),
+         Predicted = round(Predicted, digits = 2)) %>% 
+  
+  # Adding a column to indicate what the summary is
+  add_column(Summary = c("Min", "Q1", "Median", "Q3", "Max"),
+             .before = "Actual") # Moving the Summary column before the Actual Column
+```
+
+
+
+
+
+#### Part 3d iii) Correlation between Actual and Predicted
+
+```{r 3diii}
+# Calculate and save correlation
+cor_knn <- 
+  cor(country_test$Score,
+      knn27_pred)
+
+# Correlation and R2
+c("r" = cor_knn,
+  "R2" = cor_knn^2) %>% 
+  round(digits = 3)
+```
+
+The correlation and R-squared show that KNN Regression predictions are closely related to the actual values, indicating accurate predictions!
+
+
+
+
+### Part 3e) KNN: Mean Absolute Error
+
+```{r 3d_MAEregtree}
+
+# mean absolute error of predicted and true values
+MAE_knn <- MAE(country_test$Score, 
+               knn27_pred)
+
+MAE_knn_improve <- MAE_ybar - MAE_knn
+
+c(multireg = MAE_knn, 
+  average = MAE_ybar, 
+  improvement = MAE_knn_improve,
+  improve_percent = MAE_knn_improve/MAE_ybar*100)
+```
+
+Using KNN regression, the predictions are off by an average of `r round(MAE_knn, 3)`. Happiness scores would have been off by `r round(MAE_ybar, 3)` if we'd just used the mean happiness score, so the method improves MAE by `r round(MAE_knn_improve/MAE_ybar*100, digits = 1)`.
+
+
+
+
+
+## Conclusions
+
+```{r conclusion}
+model_comparison <- 
+  rbind(multireg = c(cor_multireg, 
+                     MAE_mlr, 
+                     MAE_mlr_improve),
+        
+        regtree = c(cor_regtree, 
+                    MAE_regtree, 
+                    MAE_regtree_improve),
+        
+        knn = c(cor_knn, 
+                MAE_knn, 
+                MAE_knn_improve)) %>% 
+  round(digits = 3)
+
+colnames(model_comparison) <- c("Correlation", "MAE", "MAE_Improvement")
+model_comparison
+```
+
+(answers may vary!)  
+**KNN Regression** has the highest correlation between the predicted scores and actual scores, but just slightly higher than multiple regression, while **Multiple Linear Regression** has the lowest *mean absolute error* by about 0.065. 
+
+
+For people familiar with regression analysis, Multiple Linear Regression would probably be the best. Judging the methods using MAE, the predictions are more accurate than the other two methods and the correlation is only slightly lower. In addition, MLR gives a model that can be used to understand the relationship between Happiness Score and the predictor variables.
+
+
+For people not as familiar with regression, the regression tree might be useful due to its simplicity without sacrificing that much accuracy compared to the other 2 models. 
